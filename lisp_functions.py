@@ -34,7 +34,7 @@ class LispArg:
         self.val = value
 
     def value(self):
-        return str(self.val)
+        return gdb.Value(str(self.val))
 
     def symbol(self):
         return str(self.sym)
@@ -72,17 +72,23 @@ class Lambda(LispFunction):
         if gdb.parse_and_eval(f"COMPILEDP ({self.fun.object})"):
             return "**compiled**"
         else:
-            return "lambda"
+            return "**lambda**"
 
     def args_list(self) -> list:
-        args_typ = self.args.type.target().array(self.numargs)
-        args_arr = self.args.dereference().cast(args_typ)
+        try:
+            args_typ = self.args.type.target().array(self.numargs)
+            args_arr = self.args.dereference().cast(args_typ)
 
-        return [LispArg(i, LispObject.create(arg))
-                for i, arg in zip(range(self.numargs), args_arr)]
+
+            args =  [LispArg(i, LispObject.create(args_arr[i]))
+                     for i in range(self.numargs)]
+            return args
+        except gdb.MemoryError:
+            trash_args = [LispArg(i, "???") for i in range(self.numargs)]
+            raise InvalidArgsError(self.frame, trash_args)
 
     def __str__(self) -> str:
-        return f"{self.name()}: {self.args_list()}"
+        return f"{self.name()} ({self.numargs}) {[(arg.symbol(), arg.value()) for arg in self.args_list()]}"
 
 
 class Subr(LispFunction):
@@ -100,7 +106,6 @@ class Subr(LispFunction):
     def args_list(self) -> list:
         args_typ = self.args.type.target().array(self.numargs)
         args_arr = self.args.dereference().cast(args_typ)
-
 
         return [LispArg(i, LispObject.create(args_arr[i]))
                 for i in range(self.numargs)]
@@ -128,6 +133,14 @@ class CFunctions(Enum):
     def cool_func(func_name) -> bool:
         return func_name in {func.value for func in CFunctions}
 
+
+#MARK: exceptions
 class InvalidFunctionCall(Exception):
     def __init__(self, func_name: str):
         super().__init__(f"function '{func_name}' is not a valid entry point to a Lisp")
+
+
+class InvalidArgsError(Exception):
+    def __init__(self, frame: gdb.Frame, args: list):
+        super().__init__(f"could not extract args from frame: {frame}")
+        self.args = args

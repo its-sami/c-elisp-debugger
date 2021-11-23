@@ -14,13 +14,12 @@ class LispFrameFilter:
             if CFunctions.cool_func(frame.function()):
                 yield LispFrameDecorator(frame.inferior_frame())
 
+
 class LispFrameDecorator(FrameDecorator):
     def __init__(self, frame: gdb.Frame):
         super().__init__(frame)
 
         self.lisp_function = LispFunction.create(frame)
-
-        print(f"building decorator: {self.lisp_function}")
 
     def address(self):
         return None
@@ -32,9 +31,10 @@ class LispFrameDecorator(FrameDecorator):
         return None
 
     def function(self):
-        #print(self.lisp_function.name(), type(self.lisp_function))
         return self.lisp_function.name()
 
     def frame_args(self):
-        #print(self.lisp_function.args_list(), type(self.lisp_function))
-        return self.lisp_function.args_list()
+        try:
+            return self.lisp_function.args_list()
+        except InvalidArgsError as e:
+            return e.args

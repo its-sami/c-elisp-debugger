@@ -70,10 +70,10 @@ class LispObject:
         valid_types = [
             LispSymbol,
             LispInteger,
-            LispVector,
             LispCons,
             LispFloat,
             LispString,
+            LispVector,
             LispSubr,
         ]
 
@@ -82,11 +82,17 @@ class LispObject:
             if lisp_type.claims(obj, is_tagged):
                 return lisp_type(obj, is_tagged)
 
-        print("i dunno what this is :(")
-        if is_tagged:
-            print(gdb.parse_and_eval(f"XTYPE({obj})"))
+
+        #vectorlike is a weird edge case
+        if is_tagged and LispVectorlike.claims(obj, is_tagged):
+            return LispVectorlike(obj, is_tagged)
         else:
-            print(obj.type)
+            print("i dunno what this is :(")
+
+            if is_tagged:
+                print(gdb.parse_and_eval(f"XTYPE({obj})"))
+            else:
+                print(obj.type)
 
     @staticmethod
     def from_var(name: str, frame: Optional[gdb.Frame] = None):
@@ -144,15 +150,6 @@ class LispInteger(LispObject):
     def untagged_str(self) -> str:
         pass
 
-class LispVector(LispObject):
-    type_code = "Lisp_Vectorlike"
-    type_untagger = "XVECTOR"
-    type_pred = "VECTORP"
-    lisp_type = gdb.lookup_type("struct Lisp_Vector").pointer()
-
-    def untagged_str(self) -> str:
-        pass
-
 class LispCons(LispObject):
     type_code = "Lisp_Cons"
     type_untagger = "XCONS"
@@ -202,8 +199,30 @@ class LispString(LispObject):
     def untagged_str(self) -> str:
         pass
 
-class LispSubr(LispObject):
+#vectorlike encodes a bunch of different types in the source
+#extract these out and make them inherit from LispObject as needed
+class LispVectorlike(LispObject):
     type_code = "Lisp_Vectorlike"
+    type_pred = "VECTORLIKEP"
+
+    def __init__(self, obj: gdb.Value, tagged: bool):
+        assert tagged
+        super().__init__(obj, tagged)
+
+
+#necessary vectorlikes
+class LispVector(LispObject):
+    type_code = LispVectorlike.type_code
+    type_untagger = "XVECTOR"
+    type_pred = "VECTORP"
+    lisp_type = gdb.lookup_type("struct Lisp_Vector").pointer()
+
+    def untagged_str(self) -> str:
+        raise NotImplementedError()
+
+
+class LispSubr(LispObject):
+    type_code = LispVectorlike.type_code
     type_untagger = "XSUBR"
     type_pred = "SUBRP"
     lisp_type = gdb.lookup_type("struct Lisp_Subr").pointer()
