@@ -1,5 +1,5 @@
 import gdb
-from typing import List, Optional
+from typing import List, Optional, Union, Generator
 
 class LispObject:
     def __init__(self, obj: gdb.Value, tagged: bool):
@@ -84,7 +84,7 @@ class LispObject:
 
         print("i dunno what this is :(")
         if is_tagged:
-            print(gdb.parse_and_eval("XTYPE({obj})"))
+            print(gdb.parse_and_eval(f"XTYPE({obj})"))
         else:
             print(obj.type)
 
@@ -110,6 +110,20 @@ class LispSymbol(LispObject):
     type_pred = "SYMBOLP"
     lisp_type = gdb.lookup_type("struct Lisp_Symbol").pointer()
 
+    def contents(self):
+        if self.nilp():
+            return []
+        raise NotImplementedError("haven't made contents for general symbols yet")
+
+    def name(self):
+        if self.tagged:
+            raw_str = gdb.parse_and_eval(f"SYMBOL_NAME({self.object})")
+        else:
+            raw_str = self.object.dereference()["u"]["s"]["name"]
+
+        #return LispString(raw_str, True)
+        return raw_str
+
     def untagged_str(self) -> str:
         pass
 
@@ -125,8 +139,7 @@ class LispInteger(LispObject):
         if tagged:
             return gdb.parse_and_eval(f"FIXNUMP({obj})")
         else:
-            return obj.type == gdb.lookup_type("struct Lisp_Int0").pointer() \
-                or obj.type == gdb.lookup_type("struct Lisp_Int1").pointer()
+            return obj.type == gdb.lookup_type("EMACS_INT")
 
     def untagged_str(self) -> str:
         pass
@@ -145,6 +158,28 @@ class LispCons(LispObject):
     type_untagger = "XCONS"
     type_pred = "CONSP"
     lisp_type = gdb.lookup_type("struct Lisp_Cons").pointer()
+
+    def car(self) -> LispObject:
+        if self.tagged:
+            car = gdb.parse_and_eval(f"XCAR({self.object})")
+        else:
+            car = self.object.dereference()["car"]
+
+        return LispObject.create(car)
+
+    def cdr(self) -> LispObject:
+        if self.tagged:
+            cdr = gdb.parse_and_eval(f"XCDR({self.object})")
+        else:
+            cdr = self.object.dereference()["cdr"]
+
+        return LispObject.create(cdr)
+
+    def contents(self) -> Generator[LispObject, None, None]:
+        remaining = self
+        while not remaining.nilp():
+            yield remaining.car()
+            remaining = remaining.cdr()
 
     def untagged_str(self) -> str:
         pass
@@ -173,5 +208,23 @@ class LispSubr(LispObject):
     type_pred = "SUBRP"
     lisp_type = gdb.lookup_type("struct Lisp_Subr").pointer()
 
+    UNEVALLED = gdb.parse_and_eval("UNEVALLED")
+    MANY = gdb.parse_and_eval("MANY")
+
+    def num_args(self) -> Union[range, str]:
+        subr = self.untag().dereference()
+
+        max_args = subr["max_args"]
+        if max_args == self.UNEVALLED:
+            return self.UNEVALLED
+        elif max_args == self.MANY:
+            return self.MANY
+
+        min_args = subr["min_args"]
+        return range(min_args, max_args)
+
+    def name(self) -> str:
+        return self.object.dereference()["symbol_name"].string()
+
     def untagged_str(self) -> str:
-        pass
+        return self.name()
