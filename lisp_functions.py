@@ -85,18 +85,38 @@ class Lambda(LispFunction):
         self.args = frame.read_var("arg_vector")
         self.numargs = frame.read_var("nargs")
 
-    def name(self) -> str:
-        if gdb.parse_and_eval(f"COMPILEDP ({self.fun.object})"):
-            return "**compiled**"
+        if isinstance(self.fun, LispCons):
+            self.compiled = False
+
+            elems = list(self.fun.contents())
+
+            #FIXME: haxx for lambdas vs closures
+            assert (len(elems) in {3, 4})
+
+            if len(elems) == 3:
+                self.lexenv = []
+                self.arg_names = elems[1]
+                self.body = elems[2]
+            else:
+                self.lexenv = elems[1]
+                self.arg_names = elems[2]
+                self.body = elems[3]
         else:
-            return "**lambda**"
+            self.compiled = True
+
+
+    def name(self) -> str:
+        if self.compiled:
+            return "*** compiled ***"
+
+        return f"{str(self.body)} [{self.lexenv}]"
 
     def args_list(self) -> list:
         try:
             args_typ = self.args.type.target().array(self.numargs)
             args_arr = self.args.dereference().cast(args_typ)
 
-
+            #TODO: zip in self.arg_names if possible
             args =  [LispArg(i, LispObject.create(args_arr[i]))
                      for i in range(self.numargs)]
             return args
