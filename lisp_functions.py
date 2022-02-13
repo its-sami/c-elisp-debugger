@@ -13,6 +13,19 @@ class LispFunction:
         raise NotImplementedError()
 
     @staticmethod
+    def check_name(name, frame=None) -> bool:
+        '''
+        Checks whether a function has a given name.
+
+        Optimisation for breakpoints
+        '''
+        if frame is None:
+            frame = gdb.selected_frame()
+
+        return CFunctions(frame.name()).wrapper().check_name(name)
+
+
+    @staticmethod
     def create(frame: Optional[gdb.Frame] = None):
         if frame is None:
             frame = gdb.selected_frame()
@@ -22,10 +35,6 @@ class LispFunction:
             return c_func.wrapper()(frame)
         else:
             raise InvalidFunctionCall(frame.name())
-
-    @staticmethod
-    def breakpoint(func_name: str):
-        pass
 
 
 class LispArg:
@@ -49,16 +58,24 @@ class Eval(LispFunction):
     def name(self) -> str:
         if isinstance(self.form, LispCons):
             return str(self.form.car())
-        else:
-            return str(self.form)
 
     def args_list(self):
         if isinstance(self.form, LispCons):
             yield from (LispArg(str(i), arg) for i, arg in enumerate(self.form.cdr().contents()))
+        else:
+            return LispArg("body", self.form)
 
     def __str__(self) -> str:
         return str(self.form)
 
+    @staticmethod
+    def check_name(name) -> bool:
+        if gdb.parse_and_eval("CONSP(form) && SYMBOLP(XCAR(form))"):
+            fun_name = gdb.parse_and_eval("SSDATA(SYMBOL_NAME(XCAR(form)))").string()
+            print(f"[EVAL] checking ({fun_name} ...) vs. ({name} ...)")
+            return fun_name == name
+
+        return False
 
 class Lambda(LispFunction):
     def __init__(self, frame: gdb.Frame):
@@ -112,6 +129,14 @@ class Subr(LispFunction):
 
     def __str__(self) -> str:
         return f"{self.name()} ({self.numargs}) {[(arg.symbol(), arg.value()) for arg in self.args_list()]}"
+
+    @staticmethod
+    def check_name(name) -> bool:
+        fun_name = gdb.parse_and_eval("subr->symbol_name").string()
+        print(f"[SUBR] checking ({fun_name} ...) vs. ({name} ...)")
+
+        return fun_name == name
+
 
 
 class CFunctions(Enum):
