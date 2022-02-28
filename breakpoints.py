@@ -19,3 +19,8 @@ class LispBreakpoint(gdb.Breakpoint):
 
     def __str__(self):
         return f"{self.func_name} [in {self.c_func_name}]"
+
+    @staticmethod
+    def create(func_name):
+        return (LispBreakpoint(func_name, "eval_sub"),
+                LispBreakpoint(func_name, "funcall_subr"))
