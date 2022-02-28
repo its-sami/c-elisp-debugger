@@ -7,23 +7,32 @@ class LispObject:
         self.object = obj
         self.tagged = tagged
 
+    @property
+    def object_address(self):
+        '''
+        removes the trash gdb tries to put in some types
+
+        only want the address but, e.g., __str__ of a struct has <asd> in it
+        '''
+        return self.raw_object(self.object)
+
     def nilp(self) -> bool:
         if self.tagged:
-            return gdb.parse_and_eval(f"NILP({self.object})")
+            return gdb.parse_and_eval(f"NILP({self.object_address})")
         else:
-            return gdb.parse_and_eval(f"*{self.object} == Qnil")
+            return gdb.parse_and_eval(f"*{self.object_address} == Qnil")
 
     def tagging_allowed(self) -> bool:
         if self.tagged:
             return True
         else:
-            ptr_as_int = gdb.parse_and_eval(f"XLI(XPL({self.object}))")
+            ptr_as_int = gdb.parse_and_eval(f"XLI(XPL({self.object_address}))")
             return gdb.parse_and_eval(f"FIXNUM_OVERFLOW_P({ptr_as_int})")
 
 
     def tag_untagged(self) -> gdb.Value:
         assert not self.tagged
-        return gdb.parse_and_eval(f"make_lisp_ptr({self.object}, {self.type_code})")
+        return gdb.parse_and_eval(f"make_lisp_ptr({self.object_address}, {self.type_code})")
 
     def tag(self):
         assert self.tagging_allowed()
@@ -33,7 +42,7 @@ class LispObject:
 
     def untag_tagged(self) -> gdb.Value:
         assert self.tagged
-        return gdb.parse_and_eval(f"{self.type_untagger} ({self.object})")
+        return gdb.parse_and_eval(f"{self.type_untagger} ({self.object_address})")
 
     def untag(self):
         obj = self.untag_tagged() if self.tagged else self.object
@@ -50,7 +59,7 @@ class LispObject:
     def __str__(self) -> str:
         if self.tagged:
             # need to free this string somewhere
-            return gdb.parse_and_eval(f'debug_format("%s", {self.object})').string()
+            return gdb.parse_and_eval(f'debug_format("%s", {self.object_address})').string()
         else:
             return self.untagged_str()
 
@@ -61,7 +70,7 @@ class LispObject:
     @classmethod
     def claims(cls, obj: gdb.Value, tagged: bool) -> bool:
         if tagged:
-            return gdb.parse_and_eval(f"{cls.type_pred} ({obj})")
+            return gdb.parse_and_eval(f"{cls.type_pred} ({LispObject.raw_object(obj)})")
         else:
             return obj.type == cls.lisp_type
 
@@ -90,7 +99,7 @@ class LispObject:
             print("i dunno what this is :(")
 
             if is_tagged:
-                print(gdb.parse_and_eval(f"XTYPE({obj})"))
+                print(gdb.parse_and_eval(f"XTYPE({LispObject.raw_object(obj)})"))
             else:
                 print(obj.type)
 
@@ -110,6 +119,10 @@ class LispObject:
         else:
             return LispObject.create(obj.value())
 
+    @staticmethod
+    def raw_object(obj: gdb.Value):
+        return obj.format_string(format="x")
+
 class LispSymbol(LispObject):
     type_code = "Lisp_Symbol"
     type_untagger = "XSYMBOL"
@@ -123,7 +136,7 @@ class LispSymbol(LispObject):
 
     def name(self):
         if self.tagged:
-            raw_str = gdb.parse_and_eval(f"SYMBOL_NAME({self.object})")
+            raw_str = gdb.parse_and_eval(f"SYMBOL_NAME({self.object_address})")
         else:
             raw_str = self.object.dereference()["u"]["s"]["name"]
 
@@ -143,7 +156,7 @@ class LispInteger(LispObject):
     @classmethod
     def claims(cls, obj: gdb.Value, tagged: bool) -> bool:
         if tagged:
-            return gdb.parse_and_eval(f"FIXNUMP({obj})")
+            return gdb.parse_and_eval(f"FIXNUMP({cls.raw_object(obj)})")
         else:
             return obj.type == gdb.lookup_type("EMACS_INT")
 
@@ -158,7 +171,7 @@ class LispCons(LispObject):
 
     def car(self) -> LispObject:
         if self.tagged:
-            car = gdb.parse_and_eval(f"XCAR({self.object})")
+            car = gdb.parse_and_eval(f"XCAR({self.object_address})")
         else:
             car = self.object.dereference()["car"]
 
@@ -166,7 +179,7 @@ class LispCons(LispObject):
 
     def cdr(self) -> LispObject:
         if self.tagged:
-            cdr = gdb.parse_and_eval(f"XCDR({self.object})")
+            cdr = gdb.parse_and_eval(f"XCDR({self.object_address})")
         else:
             cdr = self.object.dereference()["cdr"]
 
@@ -230,8 +243,12 @@ class LispSubr(LispObject):
     UNEVALLED = gdb.parse_and_eval("UNEVALLED")
     MANY = gdb.parse_and_eval("MANY")
 
+    @property
+    def subr(self):
+        return self.untag().object.dereference()
+
     def num_args(self) -> Union[range, str]:
-        subr = self.untag().dereference()
+        subr = self.subr
 
         max_args = subr["max_args"]
         if max_args == self.UNEVALLED:
@@ -242,8 +259,16 @@ class LispSubr(LispObject):
         min_args = subr["min_args"]
         return range(min_args, max_args)
 
-    def name(self) -> str:
-        return self.object.dereference()["symbol_name"].string()
+    def function(self):
+        subr = self.subr
+        max_args = subr["max_args"]
+
+        if max_args == self.UNEVALLED:
+            return subr["function"]["aUNEVALLED"]
+        elif max_args == self.MANY:
+            return subr["function"]["aMANY"]
+        else:
+            return subr["function"][f"a{max_args}"]
 
     def untagged_str(self) -> str:
         return self.name()
