@@ -1,177 +1,43 @@
 import gdb
 from enum import Enum, auto
 
-class Manager:
-    def __init__(self):
-        self.name = "MAIN"
-        self.breakpoints = []
-        self.disabled = set()
+class FrameType(Enum):
+    ARG = auto()
+    BODY = auto()
+    BREAKPOINT = auto()
+    UNKNOWN = auto()
 
-        self.recovery = None
 
-        self.frames = []
+class FrameState(Enum):
+    ENTRY = auto()
+    ARG = auto()
+    BODY = auto()
+    END = auto()
+    UNKNOWN = auto()
 
-        self.breakpoint()
-        gdb.events.stop.connect(self.hit)
 
-    #TODO: maybe need to make this the only listener?
-    # could subclass internal breakpoints, and pass around frames
-    # ALL THIS TO AVOID doubling up on breakpoints
-    # i.e. user wants to debug an argument
-    # but that's a function they've breakpointed
-    def hit(self, event):
-        if not isinstance(event, gdb.BreakpointEvent):
-            return
-
-        print("*** BACKTRACE ***")
-        print(self.frame_list())
-        print()
-
-        events = {
-            EventType.USER_BP: [],
-            EventType.INNER_BP: [],
-            EventType.RECOVERY_BP: []
-        }
-
-        for bp in event.breakpoints:
-            if bp in self.breakpoints:
-                events[EventType.USER_BP].append(bp)
-
-            if bp == self.recovery:
-                events[EventType.RECOVERY_BP].append(bp)
-
-            events[EventType.INNER_BP] = [ (bp, frame)
-                                           for frame in reversed(self.frames)
-                                           if frame.cares_about(bp) ]
-
-        '''
-        print("CHECKING FOR A HIT")
-        print(events)
-        if events[EventType.RECOVERY_BP]:
-            print("recovery")
-        if events[EventType.USER_BP]:
-            print("user")
-        if events[EventType.INNER_BP]:
-            print("inner")
-
-        for event_type, bps in events.items():
-            if bps:
-                print(event_type.name)
-        '''
-
-        # need to figure out priorities of breakpoints
-        if bps := events[EventType.RECOVERY_BP]:
-            print("wow we made it :)")
-            frame = EvalFrame(self, FrameType.UNKNOWN, None)
-            self.push(frame)
-        elif bps := events[EventType.USER_BP]:
-            bp = bps[0] #TODO: can i just use the first one?
-            print("ding ding ding")
-            print(bp)
-            # print("MAKING A BREAKPOINT!!!\n\n")
-
-            #FIXME: disabling breakpoint when entering debug for that bp
-            # for some reason they're triggering on other frames?
-            #FIX: I THINK the breakpoint only checks if its in the function
-            # i.e. any breakpoint within a function counts
-            # not just when it enters the function?
-            self.disable(bp)
-
-            #already in this frame so no need to insert a START point
-            frame = EvalFrame(self, FrameType.BREAKPOINT, None, breakpoint=bp)
-
-            # print(f"[{self}] {bp.location}")
-            self.push(frame)
-        elif events[EventType.INNER_BP]:
-            #take first one -- this will be the most recent frame which wants it
-            bp, frame = events[EventType.INNER_BP][0]
-
-            frame.hit(bp)
-
-    def breakpoint(self):
-        eval, subr = LispBreakpoint.create("sami/arg")
-
-        self.breakpoints.append(eval)
-        self.breakpoints.append(subr)
-
-    def disable(self, breakpoint):
-        breakpoint.enabled = False
-        self.disabled.add(breakpoint)
-
-    def enable(self, breakpoint=None):
-        if breakpoint is not None:
-            assert (breakpoint in self.disabled)
-            breakpoint.enabled = True
-            self.disabled.remove(breakpoint)
-            return
-
-        for bp in self.disabled:
-            bp.enabled = True
-
-        self.disabled = set()
-
-    def push(self, frame):
-        # print(f"pushing {frame}")
-        self.frames.append(frame)
-
-    def pop(self):
-        return self.frames.pop()
-
-    def head(self):
-        return self.frames[-1]
-
-    def full(self):
-        return len(self.frames) > 0
-
-    def empty(self):
-        return len(self.frames) == 0
-
-    def rebuild(self):
-        def find_prev_frame(frame):
-            '''
-            Find the previous *RELEVANT* frame on the real stack
-            '''
-            print("lets run it back")
-            while frame.older():
-                frame = frame.older()
-
-                if CFunctions.cool_func(frame.name()):
-                    return frame
-
-        if (prev := find_prev_frame(gdb.newest_frame())) is None:
-            print("no more frames to use")
-            return
-
-        if self.full() and self.head().frame == prev:
-            print("everything already cool")
-            return
-
-        if (one_before := prev.newer()) is None:
-            print("weird case... make sure you've popped before calling this")
-            return
-
-        self.recovery = gdb.FinishBreakpoint(one_before, internal=True)
-
-    def __str__(self):
-        return f"MANAGER:{self.name}"
-
-    def frame_list(self):
-        return '\n'.join(f"{i:>3}. {frame}" for i, frame in
-                         enumerate(self.frames))
-
-    def breakpoint_list(self):
-        return '\n'.join(f" - {bp}" for bp in self.breakpoints)
+class NavCommand(Enum):
+    # NOTE: keep the ordering here
+    # use it for later
+    # but lower value means lower on the "stop hierarchy"
+    # i.e. will stop for more
+    STEP = 1
+    NEXT = 2
+    UP = 3
 
 
 class Frame:
     def __init__(self, manager, frame_type, start, breakpoint=None):
-
         self.manager = manager
         self.type = frame_type
         self.breakpoint = breakpoint
+        self.command = NavCommand.STEP
 
         self.frame = gdb.newest_frame()
-        self.state = FrameState.ENTRY
+        if self.type == FrameType.UNKNOWN:
+            self.state = FrameState.UNKNOWN
+        else:
+            self.state = FrameState.ENTRY
 
         self.start = start
         # START is a breakpoint to enter the function
@@ -190,26 +56,58 @@ class Frame:
 
         if bp == self.start:
             self.do_start(bp)
+            return
 
         assert(self.start is None) # just being defensive
+
+        step_in = bp in self.looking_for()
+
         if bp in self.args:
-            self.do_arg(bp)
+            self.do_arg(bp, step_in)
         elif bp in self.bodies:
-            self.do_body(bp)
+            self.do_body(bp, step_in)
         elif bp == self.finish:
             self.do_finish(bp)
+
+        if step_in:
+            print("*** BACKTRACE ***")
+            print(self.manager.frame_list(backtrace=True))
+            print()
+        else:
+            gdb.execute("continue")
 
     def cares_about(self, bp):
         return bp in self.enabled or bp == self.finish or bp == self.start
 
-    def up(self):
-        '''
-        ignore all inner breakpoints, go until finish breakpoint
+    def looking_for(self):
+        important_bps = set()
 
-        will still break on user defined breakpoints
-        '''
-        self.disable(*self.enabled)
+        if self.command.value <= NavCommand.UP.value:
+            important_bps |= {self.finish}
+
+
+        if self.command.value <= NavCommand.NEXT.value:
+            important_bps |= self.bodies
+
+        if self.command.value <= NavCommand.STEP.value:
+            important_bps |= self.args
+
+        return important_bps
+
+    def step(self):
+        self.command = NavCommand.STEP
         gdb.execute("continue")
+
+    def next(self):
+        self.command = NavCommand.NEXT
+        gdb.execute("continue")
+
+    def up(self):
+        self.command = NavCommand.UP
+        gdb.execute("continue")
+
+    def cont(self):
+        self.up()
 
     @property
     def enabled(self):
@@ -226,17 +124,21 @@ class Frame:
             bp.enabled = False
             self.disabled.add(bp)
 
+    def setup(self):
+        pass
+
     def do_start(self, bp):
         print("=== start ===")
         self.start = None
         self.finish = gdb.FinishBreakpoint(internal=True)
-
         self.enable()
 
-    def do_arg(self, bp):
+        self.setup()
+
+    def do_arg(self, bp, step_in):
         raise NotImplementedError()
 
-    def do_body(self, bp):
+    def do_body(self, bp, step_in):
         raise NotImplementedError()
 
     def do_finish(self, bp):
@@ -245,15 +147,6 @@ class Frame:
         print(f"evaluation: {ret}")
 
         self.cleanup()
-
-        #return
-        if (self.type == FrameType.BREAKPOINT
-            or self.type == FrameType.UNKNOWN):
-            self.manager.rebuild()
-        elif self.manager.empty():
-            self.manager.rebuild()
-        else:
-            parent = self.manager.head().enable()
 
     def cleanup(self):
         for arg in self.args:
@@ -273,8 +166,8 @@ class Frame:
         self.disable(*self.enabled)
         self.manager.push(subframe)
 
-    def get_response(self):
-        return input("step in? [yN] ") == "y"
+    def get_response(self, msg="step in?"):
+        return input("{msg} [yN] ") == "y"
 
     def __str__(self):
         return f"{self.type.name} @{self.state.name}"
@@ -292,7 +185,6 @@ class EvalFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
         super().__init__(manager, frame_type, start, breakpoint=breakpoint)
 
-        # print("IGNORE"*5)
         self.args = { gdb.Breakpoint(label, internal=True) for label in [
             "eval_sub:func_subr_arg_many",
             "eval_sub:func_subr_arg_n",
@@ -305,31 +197,23 @@ class EvalFrame(Frame):
             "eval_sub:func_subr_body_unevalled",
             "Fprogn:func_lambda_body",
         ] }
-        # print("\\" + "IGNORE"*5)
-
 
         if self.start:
             self.disable(*self.enabled)
-
             self.fun = None
         else:
-            self.fun = LispFunction.create()
-            print(f"FUNCTION: {self.fun}")
+            self.setup()
 
         self.expr_type = None
+
+    def setup(self):
+        self.fun = LispFunction.create()
+        print(f"FUNCTION: {self.fun}")
 
     def __str__(self):
         return f"[{self.fun.name() if self.fun else '-'}] : {super().__str__()}"
 
-    def do_start(self, bp):
-        self.fun = LispFunction.create()
-        print(f"FUNCTION: {self.fun}")
-
-        super().do_start(bp)
-
-    def do_arg(self, bp):
-        print("=== arg ===")
-
+    def do_arg(self, bp, step_in):
         self.set_expr_type(bp.location)
 
         #remove irrelevant breakpoints
@@ -346,12 +230,11 @@ class EvalFrame(Frame):
             for body in to_remove:
                 body.delete()
 
-        #meat
-        step_in = self.get_response()
         if not step_in:
-            print("stepping over")
+            print("stepping through arg")
             return
 
+        print("=== arg ===")
         print("start point...")
         sub_start = gdb.Breakpoint("eval_sub", internal=True, temporary=True)
 
@@ -359,9 +242,7 @@ class EvalFrame(Frame):
         subframe = EvalFrame(self.manager, FrameType.ARG, sub_start)
         self.step_in(subframe)
 
-    def do_body(self, bp):
-        print("=== body ===")
-
+    def do_body(self, bp, step_in):
         self.set_expr_type(bp.location)
 
         #can't go back to arguments from a body
@@ -369,11 +250,13 @@ class EvalFrame(Frame):
             arg.delete()
             self.args = set()
 
-        #meat also
-        step_in = self.get_response()
+
         if not step_in:
             print("stepping over")
             return
+
+        print("=== body ===")
+
 
         #need to construct the next frame
         if self.expr_type == ExprType.CONS:
@@ -427,87 +310,108 @@ class PrimitiveFrame(Frame):
 
         if self.start:
             self.disable(*self.enabled)
+            self.guts = False
+        else:
+            self.setup()
 
-        self.line = None
+    def setup(self):
+        resp = input("debug primitive as C? [y/N] > ").strip().lower()
 
-    def do_start(self, bp):
-        #TODO: maybe setup the manual C stuff here?
+        if resp == "y":
+            self.guts = True
+            self.disable(*self.enabled)
 
-        super().do_start(bp)
-
-    def do_body(self, bp):
-        print("== body ==")
-
-        step_in = self.get_response()
+    def do_body(self, bp, step_in):
         if not step_in:
             print("stepping over")
             return
 
-        #TODO: not really eval
+        print("== body ==")
+
         subframe_class = self.frame_wrapper(CFunctions(bp.location))
         subframe = subframe_class(self.manager, FrameType.BODY, None)
 
         self.step_in(subframe)
 
+    def cont(self):
+        if self.guts:
+            self.enable()
+            self.command = NavCommand.STEP
+            gdb.execute("continue")
+        else:
+            super().cont()
+
     def __str__(self):
         return f"[{self.subr}] : {super().__str__()}"
-
 
 
 class LambdaFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
         super().__init__(manager, frame_type, start, breakpoint=breakpoint)
 
-        self.bodies = { gdb.Breakpont("eval_sub", internal=False) }
+        self.bodies = { gdb.Breakpoint("eval_sub", internal=False) }
 
         if start:
             self.disable(*self.enabled)
+        else:
+            self.setup()
 
-    def do_body(self, bp):
+    def setup(self):
+        self.fun = LispFunction.create()
+
+    def do_start(self, bp):
+        self.setup()
+        super().do_start(bp)
+
+    def do_body(self, bp, step_in):
+        if not step_in:
+            print("stepping over")
+            return
+
+        print("== body ==")
         subframe = EvalFrame(self.manager, FrameType.BODY, None)
 
         self.step_in(subframe)
+
+    def __str__(self):
+        return f"[{self.fun.name() if self.fun else '-'}] : {super().__str__()}"
 
 
 class SubrFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
         super().__init__(manager, frame_type, start, breakpoint=breakpoint)
 
+        if start:
+            self.disable(*self.enabled)
+
+            self.subr = None
+            self.bodies = set()
+        else:
+            self.setup()
+
+    def setup(self):
+        self.subr = LispFunction.create()
+        subr = self.subr.subr
+
         func_addr = f"*{LispObject.raw_object(subr.function())}"
         self.bodies = { gdb.Breakpoint(func_addr, internal=False) }
 
-        if start:
-            self.disable(*self.enabled)
-            self.subr = None
-        else:
-            subr = gdb.newest_frame().read_var("subr")
-            self.subr = LispObject.create(subr)
-
     def do_start(self, bp):
-        subr = gdb.newest_frame().read_var("subr")
-        self.subr = LispObject.create(subr)
-
+        self.setup()
         super().do_start(bp)
 
-    def do_body(self, bp):
+    def do_body(self, bp, step_in):
+        if not step_in:
+            print("stepping over")
+            return
+
+        print("== body ==")
         subframe = PrimitiveFrame(self.manager, self.subr, None)
 
         self.step_in(subframe)
 
-
-class FrameType(Enum):
-    ARG = auto()
-    BODY = auto()
-    BREAKPOINT = auto()
-    UNKNOWN = auto()
-
-
-class FrameState(Enum):
-    ENTRY = auto()
-    ARG = auto()
-    BODY = auto()
-    END = auto()
-    UNKNOWN = auto()
+    def __str__(self):
+        return f"[{self.subr.name() if self.subr else '-'}] : {super().__str__()}"
 
 
 class ExprType(Enum):
@@ -525,27 +429,3 @@ class ExprType(Enum):
         elif label in { "Fprogn:func_lambda_body",
                         "apply_lambda:func_lambda_args", }:
             return ExprType.CONS
-
-
-class EventType(Enum):
-    USER_BP = auto()
-    INNER_BP = auto()
-    RECOVERY_BP = auto()
-
-
-try:
-    for bp in man.breakpoints:
-        if bp.is_valid():
-            bp.delete()
-
-    for frame in man.frames:
-        frame.cleanup()
-
-    gdb.events.stop.disconnect(man.hit)
-
-    del(man)
-    print("lemme clean that up for you :)")
-except NameError:
-    print("already clean :)")
-finally:
-    man=Manager()

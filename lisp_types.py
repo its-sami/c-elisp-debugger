@@ -105,8 +105,7 @@ class LispObject:
 
     @staticmethod
     def from_var(name: str, frame: Optional[gdb.Frame] = None):
-        if frame is not None:
-            return LispObject.create(frame.read_var(name))
+        if frame is not None:            return LispObject.create(frame.read_var(name))
 
         obj, _ = gdb.lookup_symbol(name)
 
@@ -246,6 +245,9 @@ class LispSubr(LispObject):
     @property
     def subr(self):
         return self.untag().object.dereference()
+
+    def name(self) -> str:
+        return self.subr["symbol_name"].string()
 
     def num_args(self) -> Union[range, str]:
         subr = self.subr

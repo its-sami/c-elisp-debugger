@@ -148,7 +148,7 @@ class Subr(LispFunction):
                 for i in range(self.numargs)]
 
     def __str__(self) -> str:
-        return f"{self.name()} ({self.numargs}) {[(arg.symbol(), arg.value()) for arg in self.args_list()]}"
+        return f"{self.name()} ({self.numargs}) {[(arg.symbol(), arg.value(), type(arg.value())) for arg in self.args_list()]}"
 
     @staticmethod
     def check_name(name) -> bool:
@@ -156,7 +156,6 @@ class Subr(LispFunction):
         print(f"[SUBR] checking ({fun_name} ...) vs. ({name} ...)")
 
         return fun_name == name
-
 
 
 class CFunctions(Enum):
