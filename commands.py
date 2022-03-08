@@ -40,11 +40,13 @@ class BacktraceCommand(gdb.Command):
         super().__init__("lisp-backtrace", gdb.COMMAND_STACK, gdb.COMPLETE_COMMAND)
 
         self.manager = manager
+        self.filter = LispFrameFilter(enabled=False)
 
     def invoke(self, argument, from_tty):
         if argument == "full":
-            #TODO: this
-            pass
+            self.filter.enabled = True
+            gdb.execute("backtrace")
+            self.filter.enabled = False
         elif argument:
             print("invalid argument: [full]")
         else:

@@ -2,9 +2,9 @@ import gdb
 from gdb.FrameDecorator import FrameDecorator
 
 class LispFrameFilter:
-    def __init__(self):
+    def __init__(self, enabled=True):
         self.name = "lisp-objects"
-        self.enabled = True
+        self.enabled = enabled
         self.priority = 100
 
         gdb.frame_filters[self.name] = self
