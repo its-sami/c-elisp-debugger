@@ -5,23 +5,25 @@ class PrintCommand(gdb.Command):
         super().__init__("lisp-print", gdb.COMMAND_DATA, gdb.COMPLETE_COMMAND)
 
     def invoke(self, argument, from_tty):
-        if argument == "":
-            print("must pass in an argument")
-            return
+        args = argument.split(" ")
 
+        if len(args) == 1:
+            self.print_lisp(args[0])
+        elif len(args) == 2 and args[0] == "internal":
+            self.print_c(args[1])
+        else:
+            print("invalid usage: lisp-print (<var-name> | internal <var-name>)")
+
+    def print_lisp(self, name):
+        print(VariableLookup.get_val(name))
+
+    def print_c(self, name):
         try:
-            val = gdb.selected_frame().read_var(argument)
+            val = gdb.selected_frame().read_var(name)
             obj = LispObject.create(val)
             print(obj)
         except Exception as e:
             print(e)
-
-class LookupCommand(gdb.Command):
-    def __init__(self):
-        super().__init__("lisp-lookup", gdb.COMMAND_DATA, gdb.COMPLETE_COMMAND)
-
-    def invoke(self, argument, from_tty):
-        pass
 
 class BreakCommand(gdb.Command):
     def __init__(self, manager):

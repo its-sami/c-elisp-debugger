@@ -6,20 +6,21 @@ set print frame-arguments all
 source cleanup.py
 
 # important modules
-define load
+define load-script
   echo loading $arg0...\n
   source $arg0
 end
 
-load lisp_types.py
-load lisp_functions.py
-load backtrace.py
-load breakpoints.py
-load nav_frame.py
-load nav_manager.py
-load commands.py
+load-script lisp_types.py
+load-script lisp_functions.py
+load-script variable_lookup.py
+load-script backtrace.py
+load-script breakpoints.py
+load-script nav_frame.py
+load-script nav_manager.py
+load-script commands.py
 
 # main module
-load main.py
+load-script main.py
 
 echo all loaded!\n
