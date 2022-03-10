@@ -15,15 +15,20 @@ class PrintCommand(gdb.Command):
             print("invalid usage: lisp-print (<var-name> | internal <var-name>)")
 
     def print_lisp(self, name):
-        print(VariableLookup.get_val(name))
+        val = VariableLookup.get_val(name)
+
+        if val is None:
+            print(f"object {name} does not exist")
+        else:
+            print(val)
 
     def print_c(self, name):
         try:
             val = gdb.selected_frame().read_var(name)
             obj = LispObject.create(val)
             print(obj)
-        except Exception as e:
-            print(e)
+        except ValueError:
+            print(f"variable {name} does not exist")
 
 class BreakCommand(gdb.Command):
     def __init__(self, manager):
