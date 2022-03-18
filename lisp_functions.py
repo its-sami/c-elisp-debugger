@@ -28,7 +28,7 @@ class LispFunction:
     @staticmethod
     def create(frame: Optional[gdb.Frame] = None):
         if frame is None:
-            frame = gdb.selected_frame()
+            frame = gdb.newest_frame()
 
         if CFunctions.cool_func(frame.name()):
             c_func = CFunctions(frame.name())

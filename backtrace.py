@@ -12,6 +12,7 @@ class LispFrameFilter:
     def filter(self, frames):
         for frame in frames:
             if CFunctions.cool_func(frame.function()):
+                print(frame.name())
                 yield LispFrameDecorator(frame.inferior_frame())
 
 

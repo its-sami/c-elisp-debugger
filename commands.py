@@ -2,7 +2,7 @@ import gdb
 
 class PrintCommand(gdb.Command):
     def __init__(self):
-        super().__init__("lisp-print", gdb.COMMAND_DATA, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-print", gdb.COMMAND_DATA)
 
     def invoke(self, argument, from_tty):
         args = argument.split(" ")
@@ -24,15 +24,14 @@ class PrintCommand(gdb.Command):
 
     def print_c(self, name):
         try:
-            val = gdb.selected_frame().read_var(name)
-            obj = LispObject.create(val)
+            obj = LispObject.from_var(name)
             print(obj)
         except ValueError:
             print(f"variable {name} does not exist")
 
 class BreakCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-break", gdb.COMMAND_BREAKPOINTS, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-break", gdb.COMMAND_BREAKPOINTS)
 
         self.manager = manager
 
@@ -44,24 +43,24 @@ class BreakCommand(gdb.Command):
 
 class BacktraceCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-backtrace", gdb.COMMAND_STACK, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-backtrace", gdb.COMMAND_STACK)
 
         self.manager = manager
         self.filter = LispFrameFilter(enabled=False)
 
     def invoke(self, argument, from_tty):
-        if argument == "full":
+        if argument == "current":
+            print(self.manager.frame_list(backtrace=True))
+        elif argument:
+            print("invalid argument: [current]")
+        else:
             self.filter.enabled = True
             gdb.execute("backtrace")
             self.filter.enabled = False
-        elif argument:
-            print("invalid argument: [full]")
-        else:
-            print(self.manager.frame_list(backtrace=True))
 
 class StepCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-step", gdb.COMMAND_RUNNING, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-step", gdb.COMMAND_RUNNING)
         self.manager = manager
 
     def invoke(self, argument, from_tty):
@@ -69,7 +68,7 @@ class StepCommand(gdb.Command):
 
 class NextCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-next", gdb.COMMAND_RUNNING, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-next", gdb.COMMAND_RUNNING)
         self.manager = manager
 
     def invoke(self, argument, from_tty):
@@ -77,7 +76,7 @@ class NextCommand(gdb.Command):
 
 class UpCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-up", gdb.COMMAND_RUNNING, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-up", gdb.COMMAND_RUNNING)
         self.manager = manager
 
     def invoke(self, argument, from_tty):
@@ -85,7 +84,7 @@ class UpCommand(gdb.Command):
 
 class ContinueCommand(gdb.Command):
     def __init__(self, manager):
-        super().__init__("lisp-continue", gdb.COMMAND_RUNNING, gdb.COMPLETE_COMMAND)
+        super().__init__("lisp-continue", gdb.COMMAND_RUNNING)
         self.manager = manager
 
     def invoke(self, argument, from_tty):

@@ -105,7 +105,8 @@ class LispObject:
 
     @staticmethod
     def from_var(name: str, frame: Optional[gdb.Frame] = None):
-        if frame is not None:            return LispObject.create(frame.read_var(name))
+        if frame is not None:
+            return LispObject.create(frame.read_var(name))
 
         obj, _ = gdb.lookup_symbol(name)
 
