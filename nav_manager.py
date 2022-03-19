@@ -50,7 +50,6 @@ class Manager:
         elif bps := events[EventType.USER_BP]:
             bp = bps[0] #TODO: can i just use the first one?
             print("ding ding ding")
-            print(bp)
             # print("MAKING A BREAKPOINT!!!\n\n")
 
             #FIXME: disabling breakpoint when entering debug for that bp
@@ -70,6 +69,8 @@ class Manager:
             bp, frame = events[EventType.INNER_BP][0]
 
             frame.hit(bp)
+        else:
+            raise Exception("invalid event hit")
 
     def breakpoint(self, func_name):
         existing = [ bp for bp in self.breakpoints if bp.func_name == func_name ]

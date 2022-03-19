@@ -27,9 +27,10 @@ class NavCommand(Enum):
 
 
 class Frame:
-    def __init__(self, manager, frame_type, start, breakpoint=None):
+    def __init__(self, manager, frame_type, skip, start, args, bodies, breakpoint=None):
         self.manager = manager
         self.type = frame_type
+        self.skip = skip
         self.breakpoint = breakpoint
         self.command = NavCommand.STEP
 
@@ -39,23 +40,27 @@ class Frame:
         else:
             self.state = FrameState.ENTRY
 
+        self.args = args
+        self.bodies = bodies
+        self.disabled = set()
+
         self.start = start
         # START is a breakpoint to enter the function
         # if it is None then we must already be in the function we care about
         if self.start:
             self.finish = None
+            self.disable(*self.enabled)
+            self.setup(in_function=False)
         else:
             self.finish = gdb.FinishBreakpoint(internal=True)
-
-        self.args = set()
-        self.bodies = set()
-        self.disabled = set()
+            self.setup()
 
     def hit(self, bp):
         assert self.cares_about(bp)
 
         if bp == self.start:
-            self.do_start(bp)
+            self.do_start()
+            print(f"== START == {self} ==")
             return
 
         assert(self.start is None) # just being defensive
@@ -63,18 +68,24 @@ class Frame:
         step_in = bp in self.looking_for()
 
         if bp in self.args:
+            print(f"== ARG [step: {step_in}] == {self} ==")
             self.do_arg(bp, step_in)
         elif bp in self.bodies:
+            print(f"== BODY [step: {step_in}] == {self} ==")
             self.do_body(bp, step_in)
         elif bp == self.finish:
+            print(f"== FINISH == {self} ==")
             self.do_finish(bp)
 
+        '''
         if step_in:
             print("*** BACKTRACE ***")
             print(self.manager.frame_list(backtrace=True))
             print()
         else:
-            gdb.execute("continue")
+            print("not stepping in")
+        '''
+
 
     def cares_about(self, bp):
         return bp in self.enabled or bp == self.finish or bp == self.start
@@ -124,11 +135,10 @@ class Frame:
             bp.enabled = False
             self.disabled.add(bp)
 
-    def setup(self):
+    def setup(self, in_function=True):
         pass
 
-    def do_start(self, bp):
-        print("=== start ===")
+    def do_start(self):
         self.start = None
         self.finish = gdb.FinishBreakpoint(internal=True)
         self.enable()
@@ -142,7 +152,6 @@ class Frame:
         raise NotImplementedError()
 
     def do_finish(self, bp):
-        print("=== finish ===")
         ret = LispObject.create(bp.return_value)
         print(f"evaluation: {ret}")
 
@@ -166,6 +175,10 @@ class Frame:
         self.disable(*self.enabled)
         self.manager.push(subframe)
 
+        if subframe.start:
+            print("continuing...")
+            gdb.execute("continue")
+
     def get_response(self, msg="step in?"):
         return input("{msg} [yN] ") == "y"
 
@@ -183,32 +196,29 @@ class Frame:
 
 class EvalFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
-        super().__init__(manager, frame_type, start, breakpoint=breakpoint)
-
-        self.args = { gdb.Breakpoint(label, internal=True) for label in [
+        args = { gdb.Breakpoint(label, internal=True) for label in [
             "eval_sub:func_subr_arg_many",
             "eval_sub:func_subr_arg_n",
             "apply_lambda:func_lambda_args",
         ] }
 
-        self.bodies = { gdb.Breakpoint(label, internal=True) for label in [
+        bodies = { gdb.Breakpoint(label, internal=True) for label in [
             "eval_sub:func_subr_body_many",
             "eval_sub:func_subr_body_n",
             "eval_sub:func_subr_body_unevalled",
             "Fprogn:func_lambda_body",
         ] }
 
-        if self.start:
-            self.disable(*self.enabled)
-            self.fun = None
-        else:
-            self.setup()
-
         self.expr_type = None
 
-    def setup(self):
-        self.fun = LispFunction.create()
-        print(f"FUNCTION: {self.fun}")
+        super().__init__(manager, frame_type, False, start, args, bodies, breakpoint=breakpoint)
+
+    def setup(self, in_function=True):
+        if in_function:
+            self.fun = LispFunction.create()
+            print(f"FUNCTION: {self.fun}")
+        else:
+            self.fun = None
 
     def __str__(self):
         return f"[{self.fun.name() if self.fun else '-'}] : {super().__str__()}"
@@ -234,9 +244,8 @@ class EvalFrame(Frame):
             print("stepping through arg")
             return
 
-        print("=== arg ===")
         print("start point...")
-        sub_start = gdb.Breakpoint("eval_sub", internal=True, temporary=True)
+        sub_start = gdb.Breakpoint("eval_sub", internal=False, temporary=True)
 
         #always an eval I think...
         subframe = EvalFrame(self.manager, FrameType.ARG, sub_start)
@@ -255,13 +264,10 @@ class EvalFrame(Frame):
             print("stepping over")
             return
 
-        print("=== body ===")
-
-
         #need to construct the next frame
         if self.expr_type == ExprType.CONS:
             print("start point...")
-            sub_start = gdb.Breakpoint("eval_sub", internal=True, temporary=True)
+            sub_start = gdb.Breakpoint("eval_sub", internal=False, temporary=True)
             subframe = EvalFrame(self.manager, FrameType.BODY, sub_start)
         elif self.expr_type == ExprType.SUBR:
             fun = gdb.newest_frame().read_var("fun")
@@ -269,7 +275,7 @@ class EvalFrame(Frame):
 
             print("start point...")
             func_addr = f"*{LispObject.raw_object(subr.function())}"
-            sub_start = gdb.Breakpoint(func_addr, internal=True, temporary=True)
+            sub_start = gdb.Breakpoint(func_addr, internal=False, temporary=True)
             subframe = PrimitiveFrame(self.manager, subr, sub_start)
 
         self.step_in(subframe)
@@ -277,9 +283,6 @@ class EvalFrame(Frame):
     def set_expr_type(self, label):
         if self.expr_type is None:
             self.expr_type = ExprType.get_type(label)
-            print(f"setting {self} type to {self.expr_type.name}")
-        else:
-            print(f"{self} type is {self.expr_type.name}")
 
     def get_body(self, arg):
         pairings = {
@@ -301,32 +304,27 @@ class PrimitiveFrame(Frame):
         self.subr = subr
         print(f"PRIMITIVE: {self.subr}")
 
-        super().__init__(manager, FrameType.BODY, start) #always in a body
+        bodies = { gdb.Breakpoint(func.value, internal=True)
+                   for func in CFunctions }
 
-        # print("IGNORE"*3)
-        self.bodies = { gdb.Breakpoint(func.value, internal=True)
-                        for func in CFunctions }
-        # print("STOP IGNORING")
+        #always in a body
+        super().__init__(manager, FrameType.BODY, False, start, set(), bodies)
 
-        if self.start:
-            self.disable(*self.enabled)
-            self.guts = False
+    def setup(self, in_function=True):
+        if in_function:
+            resp = input("debug primitive as C? [y/N] > ").strip().lower()
+
+            if resp == "y":
+                self.guts = True
+                self.disable(*self.enabled)
         else:
-            self.setup()
+            self.guts = False
 
-    def setup(self):
-        resp = input("debug primitive as C? [y/N] > ").strip().lower()
-
-        if resp == "y":
-            self.guts = True
-            self.disable(*self.enabled)
 
     def do_body(self, bp, step_in):
         if not step_in:
             print("stepping over")
             return
-
-        print("== body ==")
 
         subframe_class = self.frame_wrapper(CFunctions(bp.location))
         subframe = subframe_class(self.manager, FrameType.BODY, None)
@@ -347,28 +345,21 @@ class PrimitiveFrame(Frame):
 
 class LambdaFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
-        super().__init__(manager, frame_type, start, breakpoint=breakpoint)
+        bodies = { gdb.Breakpoint("eval_sub", internal=True) }
 
-        self.bodies = { gdb.Breakpoint("eval_sub", internal=False) }
+        super().__init__(manager, frame_type, False, start, set(), bodies, breakpoint=breakpoint)
 
-        if start:
-            self.disable(*self.enabled)
+    def setup(self, in_function=True):
+        if in_function:
+            self.fun = LispFunction.create()
         else:
-            self.setup()
-
-    def setup(self):
-        self.fun = LispFunction.create()
-
-    def do_start(self, bp):
-        self.setup()
-        super().do_start(bp)
+            self.fun = None
 
     def do_body(self, bp, step_in):
         if not step_in:
             print("stepping over")
             return
 
-        print("== body ==")
         subframe = EvalFrame(self.manager, FrameType.BODY, None)
 
         self.step_in(subframe)
@@ -379,33 +370,24 @@ class LambdaFrame(Frame):
 
 class SubrFrame(Frame):
     def __init__(self, manager, frame_type, start, breakpoint=None):
-        super().__init__(manager, frame_type, start, breakpoint=breakpoint)
+        super().__init__(manager, frame_type, False, start, set(), set(), breakpoint=breakpoint)
 
-        if start:
-            self.disable(*self.enabled)
+    def setup(self, in_function=True):
+        if in_function:
+            self.subr = LispFunction.create()
+            subr = self.subr.subr
 
+            func_addr = f"*{LispObject.raw_object(subr.function())}"
+            self.bodies = { gdb.Breakpoint(func_addr, internal=True) }
+        else:
             self.subr = None
             self.bodies = set()
-        else:
-            self.setup()
-
-    def setup(self):
-        self.subr = LispFunction.create()
-        subr = self.subr.subr
-
-        func_addr = f"*{LispObject.raw_object(subr.function())}"
-        self.bodies = { gdb.Breakpoint(func_addr, internal=False) }
-
-    def do_start(self, bp):
-        self.setup()
-        super().do_start(bp)
 
     def do_body(self, bp, step_in):
         if not step_in:
             print("stepping over")
             return
 
-        print("== body ==")
         subframe = PrimitiveFrame(self.manager, self.subr, None)
 
         self.step_in(subframe)
