@@ -56,7 +56,6 @@ class Frame:
 
             if self.skip:
                 self.disable(*self.enabled)
-                print(f"skipping {self}")
                 gdb.execute("continue")
             else:
                 self.setup()
@@ -66,11 +65,13 @@ class Frame:
 
         if bp == self.start:
             self.do_start()
-            print(f"== START [skip: {self.skip}] == {self} ==")
+
 
             if self.skip:
                 self.disable(*self.enabled)
                 gdb.execute("continue")
+            else:
+                print(f"== START == {self} ==")
 
             return
 
@@ -79,31 +80,24 @@ class Frame:
             assert bp == self.finish
 
         step_in = bp in self.looking_for()
-        '''
-        print(f"do i ({self})")
-        print(f"care about ({bp.location}): ({self.command.name})")
-        print("yes" if step_in else "no")
-        '''
 
         if bp in self.args:
-            print(f"== ARG [step: {step_in}] == {self} ==")
+            if step_in:
+                print(f"== ARG == {self} ==")
+
             self.do_arg(bp, step_in)
         elif bp in self.bodies:
-            print(f"== BODY [step: {step_in}] == {self} ==")
+            if not step_in:
+                print(f"== BODY == {self} ==")
+
             self.do_body(bp, step_in)
         elif bp == self.finish:
-            print(f"== FINISH == {self} ==")
+            if not self.skip:
+                print(f"== FINISH == {self} ==")
+
             self.do_finish(bp)
 
     def cares_about(self, bp):
-        if bp in self.disabled:
-            print(f"{self} :: ignoring {bp.location}")
-
-        '''
-        print(self)
-        print(self.start, bp)
-        '''
-
         return bp in self.enabled or bp == self.finish or bp == self.start
 
     def looking_for(self):
@@ -169,7 +163,9 @@ class Frame:
 
     def do_finish(self, bp):
         ret = LispObject.create(bp.return_value)
-        print(f"evaluation: {ret}")
+
+        if not self.skip:
+            print(f"Evaluation: {ret}")
 
         self.cleanup()
         if self.skip:
@@ -194,7 +190,6 @@ class Frame:
         self.manager.push(subframe)
 
         if subframe.start:
-            print("continuing...")
             gdb.execute("continue")
 
     def get_response(self, msg="step in?"):
@@ -234,7 +229,6 @@ class EvalFrame(Frame):
     def setup(self, in_function=True):
         if in_function:
             self.fun = LispFunction.create()
-            print(f"FUNCTION: {self.fun}")
         else:
             self.fun = None
 
@@ -258,7 +252,6 @@ class EvalFrame(Frame):
             for body in to_remove:
                 body.delete()
 
-        print("start point...")
         #FIXME: this breakpoint triggers twice???
         sub_start = gdb.Breakpoint("eval_sub", internal=True, temporary=True)
 
@@ -276,14 +269,12 @@ class EvalFrame(Frame):
 
         #need to construct the next frame
         if self.expr_type == ExprType.CONS:
-            print("start point...")
             sub_start = gdb.Breakpoint("eval_sub", internal=True, temporary=True)
             subframe = EvalFrame(self.manager, FrameType.BODY, sub_start, not step_in)
         elif self.expr_type == ExprType.SUBR:
             fun = gdb.newest_frame().read_var("fun")
             subr = LispObject.create(fun)
 
-            print("start point...")
             func_addr = f"*{LispObject.raw_object(subr.function())}"
             sub_start = gdb.Breakpoint(func_addr, internal=True, temporary=True)
             subframe = PrimitiveFrame(self.manager, subr, sub_start, not step_in)
@@ -312,7 +303,6 @@ class EvalFrame(Frame):
 class PrimitiveFrame(Frame):
     def __init__(self, manager, subr, start, skip):
         self.subr = subr
-        print(f"PRIMITIVE: {self.subr}")
 
         bodies = { gdb.Breakpoint(func.value, internal=True)
                    for func in CFunctions }
