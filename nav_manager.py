@@ -60,7 +60,7 @@ class Manager:
             self.disable(bp)
 
             #already in this frame so no need to insert a START point
-            frame = EvalFrame(self, FrameType.BREAKPOINT, None, breakpoint=bp)
+            frame = EvalFrame(self, FrameType.BREAKPOINT, None, False, breakpoint=bp)
 
             # print(f"[{self}] {bp.location}")
             self.push(frame)
@@ -70,7 +70,7 @@ class Manager:
 
             frame.hit(bp)
         else:
-            raise Exception("invalid event hit")
+            print("dunno why this happens :( -- just execute: continue")
 
     def breakpoint(self, func_name):
         existing = [ bp for bp in self.breakpoints if bp.func_name == func_name ]
@@ -127,7 +127,9 @@ class Manager:
             or frame.type == FrameType.UNKNOWN):
             self.rebuild()
         elif self.empty():
-            self.rebuild()
+            print("no more frames!")
+            #TODO: re-add rebuild, optional if continuing
+            #self.rebuild()
         else:
             self.head().enable()
 
@@ -174,10 +176,9 @@ class Manager:
         # returns to the underlying frame
         func_frame = Frame.frame_wrapper(func)
         recovery = gdb.FinishBreakpoint(one_before, internal=True)
-        recovery_frame = func_frame(self, FrameType.UNKNOWN, recovery)
+        recovery_frame = func_frame(self, FrameType.UNKNOWN, recovery, False)
 
         self.push(recovery_frame)
-        gdb.execute("continue")
 
     # /stack stuff
 
